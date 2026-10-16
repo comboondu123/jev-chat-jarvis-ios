@@ -1,13 +1,13 @@
 #import <UIKit/UIKit.h>
 #import <Vision/Vision.h>
-#import <notify.h>
 
 // Jev ScreenReader：屏幕 OCR → 剪贴板
 //
 // 注入目标：微信（com.tencent.xin）/ Soul（com.soulglobal.cn），见 layout 里的 filter plist。
 // 工作方式：
-//   1. Jev 键盘出现时 post Darwin notify：com.jevchat.ask-scan
-//   2. 本插件（在聊天 App 进程内）收到通知 → 截取当前窗口 → Vision OCR（中文优先）
+//   1. Jev 键盘出现时 post 进程内通知：com.jevchat.ask-scan
+//      （键盘扩展运行在宿主 App 进程内，与插件同进程）
+//   2. 本插件收到通知 → 截取当前窗口 → Vision OCR（中文优先）
 //   3. 按视觉位置取聊天区文本（去掉顶部导航/底部输入区），写进剪贴板
 //   4. Jev 键盘 3 秒后拾取剪贴板自动分析
 // 不依赖微信/Soul 内部结构，界面怎么改都不影响——OCR 的是屏幕本身。
@@ -71,12 +71,16 @@ static void performScan(void) {
     });
 }
 
-static int g_notifyToken = 0;
+static id g_notifyObserver = nil;
 
 %ctor {
-    // Darwin notify：键盘与插件同在聊天 App 进程内时直接可达，跨进程同样可达
-    notify_register_dispatch("com.jevchat.ask-scan", &g_notifyToken,
-                             dispatch_get_main_queue(), ^(int token) {
-        performScan();
-    });
+    // 与键盘同进程：监听 com.jevchat.ask-scan（键盘在微信/Soul 里出现时广播）
+    g_notifyObserver =
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:@"com.jevchat.ask-scan"
+                        object:nil
+                         queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note) {
+                        performScan();
+                    }];
 }
