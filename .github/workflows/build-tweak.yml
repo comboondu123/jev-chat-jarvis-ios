@@ -34,7 +34,7 @@ jobs:
         run: |
           export THEOS="$RUNNER_TEMP/theos"
           export THEOS_PACKAGE_SCHEME=rootless
-          bash Tweak/package-manual.sh
+          python3 Tweak/package-deb.py
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v4
