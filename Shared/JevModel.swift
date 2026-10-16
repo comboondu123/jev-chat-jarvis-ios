@@ -24,8 +24,8 @@ struct ProviderPreset: Identifiable, Hashable {
     let model: String
     let keyHint: String
     /// 选中预设时一并写入「额外字段 JSON」（如豆包方舟需要关深度思考）。
-    /// 带默认值，旧写法不传该参数也能编译。
-    let extraJSON: String = ""
+    /// 用 var + 默认值：let 带默认值不会进入成员初始化器，传参反而编译不过。
+    var extraJSON: String = ""
 
     /// DeepSeek 国内直连、智谱 glm-4-flash、豆包（火山方舟）、OpenRouter、通义与本地 Ollama。
     static let all: [ProviderPreset] = [
