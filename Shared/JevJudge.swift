@@ -58,11 +58,15 @@ final class JevJudge {
     private let base: String
     private let key: String
     private let model: String
+    private let kind: JudgeKind
+    private let extraJSON: String
 
     init(cfg: JevConfig) {
         self.base = cfg.judgeBase.trimmingCharacters(in: .whitespaces)
         self.key = cfg.judgeKey.trimmingCharacters(in: .whitespaces)
         self.model = cfg.judgeModel.trimmingCharacters(in: .whitespaces)
+        self.kind = cfg.judgeKind
+        self.extraJSON = cfg.judgeExtraJSON.trimmingCharacters(in: .whitespaces)
     }
 
     var isConfigured: Bool { !key.isEmpty && !base.isEmpty && !model.isEmpty }
@@ -84,28 +88,125 @@ final class JevJudge {
         return b + "/v1/systemone"
     }
 
+    // MARK: 聊天兼容模式（DeepSeek / 豆包方舟等 OpenAI 兼容端点）
+    //
+    // 判断层原生是 System One 题型，通用聊天端点不吃 state+questions。
+    // 这里把题目翻译成提示词，要求模型只回一个 JSON，再解析成同样的 answers 形状，
+    // 下游（意图/风险/排序解析）与 systemone 完全一致。
+
+    static func chatURL(_ rawBase: String) -> String {
+        let b = rawBase.trimmingCharacters(in: .whitespaces)
+            .replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
+        let segs = b.split(separator: "/").map(String.init)
+        guard let last = segs.last?.lowercased() else { return b + "/chat/completions" }
+        if last == "completions" { return b }
+        return b + "/chat/completions"
+    }
+
+    /// 判断题提示词：意图 8 选 1 + 风险 0-9 打分，要求只回 JSON。
+    private var judgeSystemPrompt: String {
+        let intents = INTENTS.map { "\($0.key)（\($0.value)）" }.joined(separator: "；")
+        let risks = RISK_LEVELS.enumerated().map { "\($0.offset)=\($0.element)" }.joined(separator: "；")
+        return """
+        你是 Jev 的判断引擎。根据用户输入完成两道题，只输出一个 JSON 对象，不要输出任何其他文字，不要用 markdown 代码块：
+        {"answers":{"intent":{"choice":"意图标签","confidence":0到1的小数,"probabilities":{"意图标签":概率,…每个意图都要}},"risk":{"score":0到9的整数,"probabilities":{"风险级别文案":概率,…每个级别都要}}}}
+        题目1 意图（单选）：\(intents)
+        题目2 风险（0-9 打分，score 取 0-9 的整数）：\(risks)
+        """
+    }
+
+    /// 排序题提示词：候选文本当选项。
+    private func rankSystemPrompt(candidates: [String]) -> String {
+        let opts = candidates.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+        return """
+        你是 Jev 的排序引擎。从候选中选一条最合适的回复，只输出一个 JSON 对象，不要输出任何其他文字，不要用 markdown 代码块：
+        {"answers":{"best":{"choice":"所选候选原文（一字不差）","confidence":0到1的小数,"probabilities":{"候选原文":概率,…每条候选都要}}}}
+        候选回复：
+        \(opts)
+        """
+    }
+
+    /// 聊天模式请求：OpenAI 兼容 /chat/completions，temperature 0 + 强制 JSON。
+    private func postChat(systemPrompt: String, user: String, budget: Int) async throws -> [String: Any] {
+        var body: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": user],
+            ],
+            "temperature": 0,
+            "max_tokens": 800,
+            "stream": false,
+        ]
+        let extra = extraJSON.trimmingCharacters(in: .whitespaces)
+        if !extra.isEmpty, let data = extra.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            for (k, v) in obj { body[k] = v }
+        }
+        let data = try await JevHTTP.postJSON(
+            body,
+            url: Self.chatURL(base),
+            headers: [
+                "Content-Type": "application/json",
+                "Authorization": "Bearer \(key)",
+            ],
+            budget: budget,
+            stage: "判断"
+        )
+        guard let content = ((data["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any])?["content"] as? String else {
+            throw JevError.badJSON("chat 判断响应缺 choices[0].message.content")
+        }
+        guard let obj = parseAnswersJSON(content) else {
+            throw JevError.badJSON("chat 判断响应不是可解析的 JSON")
+        }
+        // 提示词要求的顶层是 {"answers": {…}}，直接剥出内层 answers 给下游解析
+        return obj["answers"] as? [String: Any] ?? [:]
+    }
+
+    /// 聊天模型偶尔把 JSON 包在 ```json …``` 里或前后加说明文字：
+    /// 先剥围栏，再取第一个 { 到最后一个 } 的区间解析。
+    private func parseAnswersJSON(_ raw: String) -> [String: Any]? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("```") {
+            text = text.replacingOccurrences(of: #"^```[a-zA-Z]*\s*"#, with: "", options: .regularExpression)
+            text = text.replacingOccurrences(of: #"\s*```$"#, with: "", options: .regularExpression)
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") else { return nil }
+        let slice = String(text[start...end])
+        guard let data = slice.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj
+    }
+
     // MARK: 判断（意图 + 风险，一次调用出全分布）
 
     func judge(message: String, context: String?) async throws -> JudgeResult {
         let state = context != nil && !context!.isEmpty ? "\(context!)\n\n\(message)" : message
-        let payload: [String: Any] = [
-            "model": model,
-            "state": state,
-            "questions": [
-                "intent": [
-                    "type": "choice",
-                    "instructions": "这句话的真实意图是什么？",
-                    "criteria": INTENTS,
-                ] as [String: Any],
-                "risk": [
-                    "type": "score",
-                    "instructions": "如果直接回复这句话，风险有多大？",
-                    "criteria": RISK_LEVELS,
-                ] as [String: Any],
-            ],
-        ]
-        let data = try await post(payload, stage: "判断")
-        let answers = data["answers"] as? [String: Any] ?? [:]
+        let answers: [String: Any]
+        switch kind {
+        case .systemone:
+            let payload: [String: Any] = [
+                "model": model,
+                "state": state,
+                "questions": [
+                    "intent": [
+                        "type": "choice",
+                        "instructions": "这句话的真实意图是什么？",
+                        "criteria": INTENTS,
+                    ] as [String: Any],
+                    "risk": [
+                        "type": "score",
+                        "instructions": "如果直接回复这句话，风险有多大？",
+                        "criteria": RISK_LEVELS,
+                    ] as [String: Any],
+                ],
+            ]
+            let data = try await post(payload, stage: "判断")
+            answers = data["answers"] as? [String: Any] ?? [:]
+        case .chat:
+            answers = try await postChat(systemPrompt: judgeSystemPrompt, user: state, budget: 15)
+        }
         let intentAns = answers["intent"] as? [String: Any] ?? [:]
         let riskAns = answers["risk"] as? [String: Any] ?? [:]
 
@@ -133,19 +234,30 @@ final class JevJudge {
         // 去重后再当选项：两个槽位选了同一个话术时，模型很可能给出两条一模一样的候选，
         // 而字典键不能重复（用 uniqueKeysWithValues 会直接 trap 崩掉键盘）。
         let criteria = Dictionary(candidates.map { ($0, NSNull()) }, uniquingKeysWith: { first, _ in first })
-        let payload: [String: Any] = [
-            "model": model,
-            "state": "收到的消息：\(message)\n判断出的意图：\(intent)",
-            "questions": [
-                "best": [
-                    "type": "choice",
-                    "instructions": "哪一条回复最合适？",
-                    "criteria": criteria,
-                ] as [String: Any],
-            ],
-        ]
-        let data = try await post(payload, stage: "排序")
-        let ans = (data["answers"] as? [String: Any])?["best"] as? [String: Any] ?? [:]
+        let ans: [String: Any]
+        switch kind {
+        case .systemone:
+            let payload: [String: Any] = [
+                "model": model,
+                "state": "收到的消息：\(message)\n判断出的意图：\(intent)",
+                "questions": [
+                    "best": [
+                        "type": "choice",
+                        "instructions": "哪一条回复最合适？",
+                        "criteria": criteria,
+                    ] as [String: Any],
+                ],
+            ]
+            let data = try await post(payload, stage: "排序")
+            ans = (data["answers"] as? [String: Any])?["best"] as? [String: Any] ?? [:]
+        case .chat:
+            let options = Array(criteria.keys)
+            let answers = try await postChat(
+                systemPrompt: rankSystemPrompt(candidates: options),
+                user: "收到的消息：\(message)\n判断出的意图：\(intent)",
+                budget: 12)
+            ans = answers["best"] as? [String: Any] ?? [:]
+        }
         let probs = doubleDict(ans["probabilities"])
         var ranked = candidates.map { c -> RankedCandidate in
             var p = probs[c] ?? 0
