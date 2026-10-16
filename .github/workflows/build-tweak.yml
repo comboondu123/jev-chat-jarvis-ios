@@ -28,6 +28,7 @@ jobs:
           export THEOS="$RUNNER_TEMP/theos"
           git clone --depth 1 https://github.com/theos/theos.git "$THEOS"
           bash "$THEOS/bin/update-theos"
+          brew install ldid
 
       - name: Build and package tweak
         run: |
