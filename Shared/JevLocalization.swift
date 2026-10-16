@@ -73,6 +73,7 @@ func localizedProviderName(_ id: String, language: JevLanguage) -> String? {
     guard language == .english else { return nil }
     return [
         "zhipu": "Zhipu (glm-4-flash)", "deepseek": "DeepSeek official",
+        "volcengine": "Doubao (Volcengine Ark)",
         "openrouter": "OpenRouter", "dashscope": "Alibaba Qwen", "moonshot": "Moonshot Kimi",
         "siliconflow": "SiliconFlow", "ollama": "Ollama (local network)", "custom": "Custom…",
         "typesafe": "TypeSafe direct", "vercel": "Vercel AI Gateway",
