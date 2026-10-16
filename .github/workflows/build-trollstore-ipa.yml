@@ -9,6 +9,8 @@ on:
   workflow_dispatch:
   push:
     branches: [master]
+    paths:
+      - '!Tweak/**'
 
 permissions:
   contents: read
