@@ -1,0 +1,39 @@
+name: Build Jev ScreenReader Tweak
+
+# 只在 Tweak/** 有改动时构建（App 工作流已排除 Tweak/**，互不误触发）。
+# 产物：.deb（Dopamine rootless，ellekit 兼容），Sileo/Zebra 可直接安装。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ['Tweak/**']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Theos
+        run: |
+          git clone --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+
+      - name: Build tweak package
+        run: |
+          export THEOS="$RUNNER_TEMP/theos"
+          export THEOS_PACKAGE_SCHEME=rootless
+          cd Tweak
+          make clean || true
+          make package
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jev-screenreader-deb
+          path: Tweak/packages/*.deb
+          if-no-files-found: error
