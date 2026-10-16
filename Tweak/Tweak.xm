@@ -17,7 +17,17 @@ static void performScan(void) {
         // 给界面一点稳定时间，避免截到键盘切换动画中的半帧
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            UIWindow *window = [UIApplication sharedApplication].windows.firstObject;
+            // iOS 15+ 用 UIWindowScene 取窗口（UIApplication.windows 已废弃）
+            UIWindow *window = nil;
+            for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+                if ([scene isKindOfClass:UIWindowScene.class]) {
+                    UIWindowScene *ws = (UIWindowScene *)scene;
+                    if (ws.windows.count > 0) {
+                        window = ws.windows.firstObject;
+                        break;
+                    }
+                }
+            }
             if (!window || window.bounds.size.width < 10 || window.bounds.size.height < 10) return;
 
             UIGraphicsImageRenderer *renderer =
@@ -42,7 +52,7 @@ static void performScan(void) {
             // 聊天记录在中间区域：滤掉顶部导航（cy>0.90）与底部输入栏（cy<0.08）。
             NSMutableArray *items = [NSMutableArray array];
             for (VNRecognizedTextObservation *obs in req.results) {
-                VNRecognizedText *top = obs.topCandidates.firstObject;
+                VNRecognizedText *top = [[obs topCandidates:1] firstObject];
                 if (!top) continue;
                 CGFloat cy = obs.boundingBox.origin.y + obs.boundingBox.size.height * 0.5;
                 if (cy < 0.08 || cy > 0.90) continue;
