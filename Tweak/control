@@ -1,0 +1,9 @@
+Package: com.jevchat.screenreader
+Name: Jev ScreenReader
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Depends: mobilesubstrate (>= 0.9.5000)
+Maintainer: comboonddu
+Author: comboonddu
+Section: Tweaks
+Description: 聊天界面屏幕 OCR：监听到 Jev 键盘的请求后，截取当前屏幕、识别聊天文字并写入剪贴板，配合 Jev 键盘「复制即回复」自动生成回复。仅在你自己的越狱设备上使用，识别出的文字会发送到你配置的模型 API。
