@@ -102,6 +102,8 @@ struct ProvidersView: View {
                 if let p = JudgePreset.all.first(where: { $0.id == id }), p.id != "custom" {
                     store.config.judgeBase = p.base
                     store.config.judgeModel = p.model
+                    store.config.judgeKind = p.kind
+                    store.config.judgeExtraJSON = p.extraJSON
                 }
             }
 
@@ -123,7 +125,7 @@ struct ProvidersView: View {
         } header: {
             Text(jevLocalized(store.language, zh: "判断层（Jev · 意图 + 风险 + 排序）", en: "Judge (Jev · intent + risk + ranking)"))
         } footer: {
-            Text(jevLocalized(store.language, zh: "核心判断引擎：一次调用出 8 类意图概率和 0–9 风险分布，并给候选排序。没填 key 时键盘退化为「盲起草」（只出候选）。网关地址填到动作段或带 /v1 都能拼对；key 与生成层可以不是同一家。", en: "The judge returns probabilities for 8 intents, a 0–9 risk score, and candidate ranking. Without a key, the keyboard falls back to drafting only. The judge and generation providers can differ."))
+            Text(jevLocalized(store.language, zh: "核心判断引擎：一次调用出 8 类意图概率和 0–9 风险分布，并给候选排序。没填 key 时键盘退化为「盲起草」（只出候选）。判断层可用 Jev 原生（systemone 题型）或 OpenAI 兼容聊天模型（DeepSeek/豆包方舟，题目自动翻译成提示词）；key 与生成层可以不是同一家。", en: "The judge returns probabilities for 8 intents, a 0–9 risk score, and candidate ranking. Without a key, the keyboard falls back to drafting only. Judge can use native System One or OpenAI-compatible chat models (DeepSeek/Doubao Ark); the judge and generation providers can differ."))
         }
     }
 }
