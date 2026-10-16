@@ -26,6 +26,7 @@ jobs:
       - name: Set up Theos
         run: |
           git clone --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+          bash "$RUNNER_TEMP/theos/bin/update-theos"
 
       - name: Build and package tweak
         run: |
