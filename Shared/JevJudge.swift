@@ -127,7 +127,7 @@ final class JevJudge {
     }
 
     /// 聊天模式请求：OpenAI 兼容 /chat/completions，temperature 0 + 强制 JSON。
-    private func postChat(systemPrompt: String, user: String, budget: Int) async throws -> [String: Any] {
+    private func postChat(systemPrompt: String, user: String, budget: Double) async throws -> [String: Any] {
         var body: [String: Any] = [
             "model": model,
             "messages": [
