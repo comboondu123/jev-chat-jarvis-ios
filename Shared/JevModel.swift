@@ -51,25 +51,52 @@ struct ProviderPreset: Identifiable, Hashable {
     ]
 }
 
-/// 判断层预设。Jev native 在 waitlist，网关同形状只换地址+模型+key。
+/// 判断层 API 形状。systemone = Jev 原生题型（state + questions，返回概率分布）；
+/// chat = 通用 OpenAI 兼容聊天端点（DeepSeek / 豆包方舟等），题目由客户端翻译成提示词。
+enum JudgeKind: String, Codable, CaseIterable, Identifiable {
+    case systemone
+    case chat
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .systemone: return "System One 题型（Jev 原生）"
+        case .chat: return "OpenAI 兼容聊天（DeepSeek/豆包等）"
+        }
+    }
+}
+
+/// 判断层预设。Jev native 在 waitlist，网关同形状只换地址+模型+key；
+/// DeepSeek / 豆包方舟走 kind == .chat，题目自动翻译成提示词。
 struct JudgePreset: Identifiable, Hashable {
     let id: String
     let name: String
+    let kind: JudgeKind
     let base: String
     let model: String
     let keyHint: String
+    /// 聊天模式下随请求体带上的额外字段（如豆包方舟关深度思考）。
+    /// 用 var + 默认值：let 带默认值不会进入成员初始化器，传参反而编译不过。
+    var extraJSON: String = ""
 
     static let all: [JudgePreset] = [
-        .init(id: "typesafe", name: "TypeSafe 直连",
+        .init(id: "typesafe", name: "TypeSafe 直连", kind: .systemone,
               base: "https://api.typesafe.ai", model: "jev-latest",
               keyHint: "api.typesafe.ai 的 key"),
-        .init(id: "openrouter", name: "OpenRouter 网关",
+        .init(id: "openrouter", name: "OpenRouter 网关", kind: .systemone,
               base: "https://openrouter.ai/api/alpha/decisions", model: "typesafe/jev-1.13",
               keyHint: "OpenRouter 的 sk-or-…"),
-        .init(id: "vercel", name: "Vercel AI Gateway",
+        .init(id: "vercel", name: "Vercel AI Gateway", kind: .systemone,
               base: "https://ai-gateway.vercel.sh/v1/evaluate", model: "typesafe-ai/jev",
               keyHint: "Vercel AI Gateway 的 key"),
-        .init(id: "custom", name: "自定义…", base: "", model: "", keyHint: ""),
+        .init(id: "deepseek", name: "DeepSeek 官方（判断）", kind: .chat,
+              base: "https://api.deepseek.com", model: "deepseek-chat",
+              keyHint: "platform.deepseek.com 的 sk-…"),
+        .init(id: "volcengine", name: "豆包（火山方舟）（判断）", kind: .chat,
+              base: "https://ark.cn-beijing.volces.com/api/v3", model: "doubao-seed-2-1-lite-260915",
+              keyHint: "火山方舟控制台的 API Key（ark.volcengine.com → API Key 管理）",
+              extraJSON: "{\"thinking\":{\"type\":\"disabled\"}}"),
+        .init(id: "custom", name: "自定义…", kind: .systemone, base: "", model: "", keyHint: ""),
     ]
 }
 
@@ -104,6 +131,10 @@ struct JevConfig: Codable, Equatable {
     var judgeBase: String = "https://api.typesafe.ai"
     var judgeKey: String = ""
     var judgeModel: String = "jev-latest"
+    /// 判断层请求形状：systemone（Jev 原生题型）或 chat（DeepSeek/豆包等聊天端点）
+    var judgeKind: JudgeKind = .systemone
+    /// 判断层聊天模式下额外请求体字段（JSON），如豆包方舟 {"thinking":{"type":"disabled"}}
+    var judgeExtraJSON: String = ""
 
     /// 话术槽位。空串 = 不用（与 macOS 版 NONE_LABEL 同语义）。最多 3 槽。
     var slots: [String] = ["高情商话术", "稳如老狗"]
@@ -118,6 +149,33 @@ struct JevConfig: Codable, Equatable {
         GenCredentials(kind: genKind, base: genBase, key: genKey,
                        model: genModel, extraJSON: genExtraJSON)
     }
+
+    enum CodingKeys: String, CodingKey {
+        case genKind, genBase, genKey, genModel, genExtraJSON
+        case judgeBase, judgeKey, judgeModel, judgeKind, judgeExtraJSON
+        case slots, customTones
+    }
+
+    /// 老版本存档没有 judgeKind / judgeExtraJSON 等新字段，逐个兜默认值，
+    /// 否则解码失败会把用户已配的 Key 全部抹掉。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        genKind = try c.decodeIfPresent(APIKind.self, forKey: .genKind) ?? .openai
+        genBase = try c.decodeIfPresent(String.self, forKey: .genBase) ?? "https://open.bigmodel.cn/api/paas/v4"
+        genKey = try c.decodeIfPresent(String.self, forKey: .genKey) ?? ""
+        genModel = try c.decodeIfPresent(String.self, forKey: .genModel) ?? "glm-4-flash"
+        genExtraJSON = try c.decodeIfPresent(String.self, forKey: .genExtraJSON) ?? ""
+        judgeBase = try c.decodeIfPresent(String.self, forKey: .judgeBase) ?? "https://api.typesafe.ai"
+        judgeKey = try c.decodeIfPresent(String.self, forKey: .judgeKey) ?? ""
+        judgeModel = try c.decodeIfPresent(String.self, forKey: .judgeModel) ?? "jev-latest"
+        judgeKind = try c.decodeIfPresent(JudgeKind.self, forKey: .judgeKind) ?? .systemone
+        judgeExtraJSON = try c.decodeIfPresent(String.self, forKey: .judgeExtraJSON) ?? ""
+        slots = try c.decodeIfPresent([String].self, forKey: .slots) ?? ["高情商话术", "稳如老狗"]
+        customTones = try c.decodeIfPresent([String: String].self, forKey: .customTones) ?? [:]
+    }
+
+    /// 全新默认配置（未存过盘的路径）。
+    init() {}
 }
 
 /// 键盘侧回写的运行状态，主 App 的引导页用它判断「键盘装没装、全访问给没给」。
