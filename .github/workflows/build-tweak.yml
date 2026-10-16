@@ -12,6 +12,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: jev-tweak-build
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-latest
@@ -19,9 +23,10 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Theos
+      - name: Set up Theos and dpkg
         run: |
           git clone --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
+          brew install dpkg
 
       - name: Build tweak package
         run: |
