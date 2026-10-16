@@ -1,0 +1,66 @@
+name: Build TrollStore IPA
+
+# 触发方式：
+#   - 手动：Actions 页面 → Build TrollStore IPA → Run workflow
+#   - 自动：向 master 分支 push（含上传本工作流那次）
+# 原理：macOS 云编译（无需 Mac/Apple ID）→ ldid 写入 App Group entitlements
+#       （免签名）→ 打包 Payload 结构 IPA → 上传为 artifact，供 TrollStore 安装。
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jev-trollstore-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install xcodegen and ldid
+        run: brew install xcodegen ldid
+
+      - name: Show toolchain versions
+        run: |
+          xcodebuild -version
+          xcodegen --version
+          ldid 2>&1 | head -n 2 || true
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build app (no code signing)
+        run: |
+          xcodebuild -project JevJarvis.xcodeproj \
+            -scheme JevJarvis \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Sign with ldid and package IPA
+        run: |
+          bash tools/trollstore/make-ipa.sh \
+            "$PWD/build/Build/Products/Release-iphoneos" \
+            "$PWD/dist"
+
+      - name: Verify IPA contents
+        run: |
+          unzip -l dist/jev-jarvis-trollstore.ipa
+          ls -lh dist/jev-jarvis-trollstore.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jev-jarvis-trollstore-ipa
+          path: dist/jev-jarvis-trollstore.ipa
+          if-no-files-found: error
