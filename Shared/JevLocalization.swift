@@ -64,6 +64,7 @@ func localizedToneName(_ name: String, language: JevLanguage) -> String {
         "卑微乙方": "Humble vendor", "稳如老狗": "Calm engineer", "已读乱回": "Minimal reply",
         "鱼塘主": "The charmer", "职场黑话": "Corporate jargon", "阴阳怪气": "Sarcastic",
         "情绪价值": "Emotional support", "夸夸": "Hype friend", "讨好型人格": "People pleaser",
+        "狗头军师": "Love strategist",
         NONE_LABEL: "Off",
     ][name] ?? name
 }
@@ -92,6 +93,7 @@ func toneEnglishDescription(_ name: String) -> String {
         "情绪价值": "Validate the other person’s feelings before offering advice or solutions.",
         "夸夸": "Praise a specific detail warmly, then handle the practical request.",
         "讨好型人格": "Soft and eager to please, but still clear enough to send directly.",
+        "狗头军师": "A relationship-wise strategist: acknowledge feelings first, read the situation, then offer one sincere, dignified line that keeps your options open.",
     ][name] ?? (BUILTIN_TONES[name] ?? "")
 }
 
