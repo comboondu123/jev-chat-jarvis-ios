@@ -241,6 +241,23 @@ enum JevStore {
         }
     }
 
+    // MARK: 剪贴板拾取（复制即回复）
+    //
+    // 键盘扩展没有屏幕读取权限，剪贴板是唯一合法的「读聊天内容」通道。
+    // 记下上次看到的 changeCount：键盘出现时剪贴板变了就自动分析一次。
+    private static let clipCountKey = "jev.clipcount.v1"
+
+    /// 上次记录到的剪贴板 changeCount。从未记录过返回 nil（首次不自动分析，
+    /// 避免把用户手机里残留的旧剪贴板内容误当成刚复制的新消息）。
+    static func lastClipboardCount() -> Int? {
+        guard defaults.object(forKey: clipCountKey) != nil else { return nil }
+        return defaults.integer(forKey: clipCountKey)
+    }
+
+    static func saveClipboardCount(_ c: Int) {
+        defaults.set(c, forKey: clipCountKey)
+    }
+
     /// 密钥展示用掩码
     static func masked(_ key: String) -> String {
         guard !key.isEmpty else { return "（未配置）" }
