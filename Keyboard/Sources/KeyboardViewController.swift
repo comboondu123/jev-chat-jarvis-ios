@@ -84,10 +84,30 @@ final class KeyboardViewController: UIInputViewController {
         // 回写状态：主 App「开始」页据此显示键盘是否已启用、是否给了完全访问
         JevStore.saveKeyboardStatus(KeyboardStatus(lastSeen: Date(), hasFullAccess: hasFullAccess))
         prewarm()
+        autoPickClipboard()
         // 刚出现时 frame 还没定，等键盘铺开后再量容器间隙
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             self?.coverContainerGap()
         }
+    }
+
+    /// 复制即回复：键盘出现时剪贴板自上次记录后变过，且当前停在待机页 →
+    /// 自动开始分析，不用再点按钮。首次使用（从未记录过）只记数不自动跑，
+    /// 避免把手机里残留的旧剪贴板内容误当成刚复制的新消息。
+    private func autoPickClipboard() {
+        guard mode == .idle || mode == .gate else { return }
+        let count = UIPasteboard.general.changeCount
+        let last = JevStore.lastClipboardCount()
+        guard let last, count != last else {
+            // 没有新复制（或首次）：把当前计数记下，保证「复制后才触发」的语义
+            JevStore.saveClipboardCount(count)
+            return
+        }
+        JevStore.saveClipboardCount(count)
+        guard hasFullAccess,
+              let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return }
+        run(message: text)
     }
 
     /// 预热生成层连接。实测同一条起草请求，第二次能从 ~1.9 秒降到 ~0.5 秒——
@@ -354,7 +374,7 @@ final class KeyboardViewController: UIInputViewController {
         let cfg = JevStore.loadConfig()
 
         let guide = KB.label(
-            L("长按对方消息 → 复制，再点下面的按钮", "Long-press the message → Copy, then tap a button below"),
+            L("在聊天里长按消息 → 复制，键盘会自动分析", "Long-press a message → Copy; the keyboard analyzes automatically"),
             font: .systemFont(ofSize: 12), color: KB.secondaryText)
 
         let clipBtn = KB.button(L("分析剪贴板", "Analyze Clipboard"), icon: "doc.on.clipboard", primary: true,
@@ -381,12 +401,22 @@ final class KeyboardViewController: UIInputViewController {
         tonesBtn.heightAnchor.constraint(equalToConstant: 34).isActive = true
         tonesBtn.addTarget(self, action: #selector(openTonePicker), for: .touchUpInside)
 
-        // 待机页**不放**发送键：这一页还没有候选，没有可发的东西；而输入框一旦有字，
-        // 宿主 App 自己的发送按钮就出来了，
-        // 键盘下方再挂一个只是添乱。发送键只在结果页——点完候选、手还在面板上时用。
         let vstack = UIStackView(arrangedSubviews: [guide, btnRow, tonesBtn])
         vstack.axis = .vertical
         vstack.spacing = 8
+
+        // 剪贴板有内容但这次弹出没自动触发（键盘一直开着时复制的）：给个显式入口
+        if hasFullAccess,
+           let t = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !t.isEmpty {
+            let preview = t.count > 22 ? String(t.prefix(22)) + "…" : t
+            let chip = KB.button(L("剪贴板：\(preview) 〔分析〕", "Clipboard: \(preview) 〔Analyze〕"),
+                                 icon: "doc.on.clipboard", font: .systemFont(ofSize: 12))
+            chip.heightAnchor.constraint(equalToConstant: 34).isActive = true
+            chip.addTarget(self, action: #selector(analyzeClipboard), for: .touchUpInside)
+            vstack.insertArrangedSubview(chip, at: 1)
+        }
+
         if JevDraft(cfg: cfg).isConfigured {
             // 配置完整时不占行
         } else {
