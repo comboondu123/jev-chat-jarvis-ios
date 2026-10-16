@@ -23,13 +23,20 @@ struct ProviderPreset: Identifiable, Hashable {
     let base: String
     let model: String
     let keyHint: String
+    /// 选中预设时一并写入「额外字段 JSON」（如豆包方舟需要关深度思考）。
+    /// 带默认值，旧写法不传该参数也能编译。
+    let extraJSON: String = ""
 
-    /// DeepSeek 国内直连、智谱 glm-4-flash、OpenRouter、通义与本地 Ollama。
+    /// DeepSeek 国内直连、智谱 glm-4-flash、豆包（火山方舟）、OpenRouter、通义与本地 Ollama。
     static let all: [ProviderPreset] = [
         .init(id: "zhipu", name: "智谱（glm-4-flash）", kind: .openai,
               base: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-flash", keyHint: "open.bigmodel.cn 的 API Key"),
         .init(id: "deepseek", name: "DeepSeek 官方", kind: .openai,
               base: "https://api.deepseek.com", model: "deepseek-chat", keyHint: "platform.deepseek.com 的 sk-…"),
+        .init(id: "volcengine", name: "豆包（火山方舟）", kind: .openai,
+              base: "https://ark.cn-beijing.volces.com/api/v3", model: "doubao-seed-2-1-lite-260915",
+              keyHint: "火山方舟控制台的 API Key（ark.volcengine.com → API Key 管理）",
+              extraJSON: "{\"thinking\":{\"type\":\"disabled\"}}"),
         .init(id: "openrouter", name: "OpenRouter", kind: .openai,
               base: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-chat-v3.1", keyHint: "sk-or-…"),
         .init(id: "dashscope", name: "阿里通义（兼容模式）", kind: .openai,
@@ -88,7 +95,8 @@ struct JevConfig: Codable, Equatable {
     var genBase: String = "https://open.bigmodel.cn/api/paas/v4"
     var genKey: String = ""
     var genModel: String = "glm-4-flash"
-    /// 额外请求体字段（JSON），端点要靠额外字段关思考模式时填，如 {"enable_thinking":false}
+    /// 额外请求体字段（JSON），端点要靠额外字段关思考模式时填，
+    /// 如豆包方舟 {"thinking":{"type":"disabled"}} 或旧端点 {"enable_thinking":false}
     var genExtraJSON: String = ""
 
     // 判断层（Jev：意图 + 风险 + 排序，核心判断引擎）。
