@@ -23,22 +23,26 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Theos and dpkg
+      - name: Set up Theos
         run: |
           git clone --depth 1 https://github.com/theos/theos.git "$RUNNER_TEMP/theos"
-          brew install dpkg
 
-      - name: Build tweak package
+      - name: Build and package tweak
         run: |
           export THEOS="$RUNNER_TEMP/theos"
           export THEOS_PACKAGE_SCHEME=rootless
-          cd Tweak
-          make clean || true
-          make package
+          bash Tweak/package-manual.sh
 
       - name: Upload deb artifact
         uses: actions/upload-artifact@v4
         with:
           name: jev-screenreader-deb
           path: Tweak/packages/*.deb
+          if-no-files-found: error
+
+      - name: Upload manual zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jev-screenreader-manual
+          path: Tweak/packages/*.zip
           if-no-files-found: error
