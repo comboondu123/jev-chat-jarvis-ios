@@ -84,7 +84,15 @@ final class KeyboardViewController: UIInputViewController {
         // 回写状态：主 App「开始」页据此显示键盘是否已启用、是否给了完全访问
         JevStore.saveKeyboardStatus(KeyboardStatus(lastSeen: Date(), hasFullAccess: hasFullAccess))
         prewarm()
-        autoPickClipboard()
+        let picked = autoPickClipboard()
+        if !picked {
+            // 剪贴板没新内容：通知越狱插件截屏 OCR（微信/Soul 聊天界面）写入剪贴板，
+            // 等它写完（插件内部约 1.2s）再拾取一次
+            postScanRequest()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                _ = self?.autoPickClipboard()
+            }
+        }
         // 刚出现时 frame 还没定，等键盘铺开后再量容器间隙
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             self?.coverContainerGap()
@@ -94,20 +102,30 @@ final class KeyboardViewController: UIInputViewController {
     /// 复制即回复：键盘出现时剪贴板自上次记录后变过，且当前停在待机页 →
     /// 自动开始分析，不用再点按钮。首次使用（从未记录过）只记数不自动跑，
     /// 避免把手机里残留的旧剪贴板内容误当成刚复制的新消息。
-    private func autoPickClipboard() {
-        guard mode == .idle || mode == .gate else { return }
+    /// 返回是否已开始分析（true 时不再走屏幕 OCR 兜底，防止 OCR 结果覆盖刚复制的消息）。
+    private func autoPickClipboard() -> Bool {
+        guard mode == .idle || mode == .gate else { return false }
         let count = UIPasteboard.general.changeCount
         let last = JevStore.lastClipboardCount()
         guard let last, count != last else {
             // 没有新复制（或首次）：把当前计数记下，保证「复制后才触发」的语义
             JevStore.saveClipboardCount(count)
-            return
+            return false
         }
         JevStore.saveClipboardCount(count)
         guard hasFullAccess,
               let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty else { return }
+              !text.isEmpty else { return false }
         run(message: text)
+        return true
+    }
+
+    /// 通知越狱插件（com.jevchat.screenreader）截屏 OCR 聊天内容写入剪贴板。
+    /// 没装插件时这条 Darwin 通知无人接收，完全无害。
+    private func postScanRequest() {
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinCenter(),
+                                             "com.jevchat.ask-scan" as CFString,
+                                             nil, nil, true)
     }
 
     /// 预热生成层连接。实测同一条起草请求，第二次能从 ~1.9 秒降到 ~0.5 秒——
