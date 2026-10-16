@@ -142,6 +142,11 @@ struct JevConfig: Codable, Equatable {
     /// 用户自定义话术（名字 = 说明），同名覆盖内置。
     var customTones: [String: String] = [:]
 
+    /// 键盘出现时是否自动读取剪贴板并分析（「复制即回复」+ 越狱屏幕 OCR 喂键盘都走这条）。
+    /// 关掉后只在手动点「分析剪贴板」时读取——系统粘贴提示会明显变少（iOS 键盘扩展没有
+    /// 关闭粘贴询问的 API，控制读取频率是唯一能做到的「只同意一次」）。
+    var autoClipboard: Bool = true
+
     var activeSlots: [String] { Array(slots.filter { !$0.isEmpty }.prefix(MAX_SLOTS)) }
 
     /// 生成层凭据完全来自用户配置，不会回退到项目提供的服务。
@@ -153,7 +158,7 @@ struct JevConfig: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case genKind, genBase, genKey, genModel, genExtraJSON
         case judgeBase, judgeKey, judgeModel, judgeKind, judgeExtraJSON
-        case slots, customTones
+        case slots, customTones, autoClipboard
     }
 
     /// 老版本存档没有 judgeKind / judgeExtraJSON 等新字段，逐个兜默认值，
@@ -172,6 +177,7 @@ struct JevConfig: Codable, Equatable {
         judgeExtraJSON = try c.decodeIfPresent(String.self, forKey: .judgeExtraJSON) ?? ""
         slots = try c.decodeIfPresent([String].self, forKey: .slots) ?? ["高情商话术", "稳如老狗"]
         customTones = try c.decodeIfPresent([String: String].self, forKey: .customTones) ?? [:]
+        autoClipboard = try c.decodeIfPresent(Bool.self, forKey: .autoClipboard) ?? true
     }
 
     /// 全新默认配置（未存过盘的路径）。

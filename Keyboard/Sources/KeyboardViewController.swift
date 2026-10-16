@@ -17,7 +17,7 @@ final class KeyboardViewController: UIInputViewController {
         jevLocalized(language, zh: zh, en: en)
     }
 
-    private enum Mode { case gate, idle, tones, loading, result, error }
+    private enum Mode { case gate, idle, tones, loading, result, error, typing }
 
     private var mode: Mode = .idle
     private var lastSource: Source = .clipboard
@@ -27,6 +27,26 @@ final class KeyboardViewController: UIInputViewController {
     private var stageLabel = UILabel()
 
     private enum Source { case clipboard, inputField }
+
+    // MARK: 打字键盘状态（顶栏 ⌨️ 切换；不参与 AI 面板流程）
+
+    private enum TypeLayer { case letters, symbols }
+
+    /// 打字键盘的全部可变状态。切层/切中英时整体重建视图，状态留在结构体里不丢。
+    private struct TypeState {
+        var layer: TypeLayer = .letters
+        var chinese = true
+        var shift = false
+        var pinyin = ""
+    }
+
+    private var typeState = TypeState()
+    private var typeModeBtn: UIButton?
+    private weak var typePinyinLabel: UILabel?
+    private weak var typeCandStack: UIStackView?
+    private weak var typeShiftBtn: UIButton?
+    private weak var typeLayerBtn: UIButton?
+    private weak var typeLangBtn: UIButton?
 
     // MARK: 布局骨架
 
@@ -84,13 +104,17 @@ final class KeyboardViewController: UIInputViewController {
         // 回写状态：主 App「开始」页据此显示键盘是否已启用、是否给了完全访问
         JevStore.saveKeyboardStatus(KeyboardStatus(lastSeen: Date(), hasFullAccess: hasFullAccess))
         prewarm()
-        let picked = autoPickClipboard()
-        if !picked {
-            // 剪贴板没新内容：通知越狱插件截屏 OCR（微信/Soul 聊天界面）写入剪贴板，
-            // 等它写完（插件内部约 1.2s）再拾取一次
-            postScanRequest()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-                _ = self?.autoPickClipboard()
+        // 只有停在 AI 待机页且开着「自动分析」时才自动拾取/请求屏幕扫描；
+        // 打字模式或关掉自动分析时，剪贴板只在手动点按钮时读（粘贴提示更少）。
+        if mode == .idle, JevStore.loadConfig().autoClipboard {
+            let picked = autoPickClipboard()
+            if !picked {
+                // 剪贴板没新内容：通知越狱插件截屏 OCR（微信/Soul 聊天界面）写入剪贴板，
+                // 等它写完（插件内部约 1.2s）再拾取一次
+                postScanRequest()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+                    _ = self?.autoPickClipboard()
+                }
             }
         }
         // 刚出现时 frame 还没定，等键盘铺开后再量容器间隙
@@ -105,6 +129,7 @@ final class KeyboardViewController: UIInputViewController {
     /// 返回是否已开始分析（true 时不再走屏幕 OCR 兜底，防止 OCR 结果覆盖刚复制的消息）。
     private func autoPickClipboard() -> Bool {
         guard mode == .idle || mode == .gate else { return false }
+        guard JevStore.loadConfig().autoClipboard else { return false }
         let count = UIPasteboard.general.changeCount
         let last = JevStore.lastClipboardCount()
         guard let last, count != last else {
@@ -148,7 +173,7 @@ final class KeyboardViewController: UIInputViewController {
         super.traitCollectionDidChange(previous)
         view.layer.borderColor = KB.cardBorder.cgColor
         // 重建各状态视图以刷新动态色
-        if mode == .idle || mode == .gate { render() }
+        if mode == .idle || mode == .gate || mode == .typing { render() }
     }
 
     // MARK: 顶栏：品牌 + 状态 + 系统键盘切换 + 删除
@@ -171,6 +196,16 @@ final class KeyboardViewController: UIInputViewController {
         title.spacing = 6
         title.alignment = .center
 
+        // ⌨️/✨：在「AI 回复面板」和「打字键盘」之间切换（打字的日常入口）
+        let typeBtn = KB.button("", icon: "keyboard")
+        typeBtn.accessibilityLabel = L("切换打字键盘", "Switch to typing keyboard")
+        typeBtn.addTarget(self, action: #selector(toggleTypeMode), for: .touchUpInside)
+        NSLayoutConstraint.activate([
+            typeBtn.widthAnchor.constraint(equalToConstant: 44),
+            typeBtn.heightAnchor.constraint(equalToConstant: 36),
+        ])
+        typeModeBtn = typeBtn
+
         let globe = KB.button("", icon: "globe")
         globe.addTarget(self, action: #selector(switchKeyboard), for: .touchUpInside)
         NSLayoutConstraint.activate([
@@ -187,7 +222,7 @@ final class KeyboardViewController: UIInputViewController {
 
         topBar.addSubview(title)
         title.translatesAutoresizingMaskIntoConstraints = false
-        let hstack = UIStackView(arrangedSubviews: [UIView(), globe, backspace])
+        let hstack = UIStackView(arrangedSubviews: [UIView(), typeBtn, globe, backspace])
         hstack.axis = .horizontal
         hstack.spacing = 8
         topBar.addSubview(hstack)
@@ -345,6 +380,8 @@ final class KeyboardViewController: UIInputViewController {
         contentStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         fitBlocks = []
         lastFit = nil
+        // 顶栏 ⌨️/✨ 图标跟着当前模式走
+        typeModeBtn?.configuration?.image = UIImage(systemName: mode == .typing ? "sparkles" : "keyboard")
         switch mode {
         case .gate: contentStack.addArrangedSubview(gateView())
         case .idle: contentStack.addArrangedSubview(idleView())
@@ -352,12 +389,19 @@ final class KeyboardViewController: UIInputViewController {
         case .loading: contentStack.addArrangedSubview(loadingView())
         case .result: contentStack.addArrangedSubview(resultView())
         case .error: contentStack.addArrangedSubview(errorView())
+        case .typing: contentStack.addArrangedSubview(typingView())
         }
     }
 
     private func setMode(_ m: Mode) {
         mode = m
         render()
+    }
+
+    /// 顶栏 ⌨️：AI 面板 ↔ 打字键盘。进入打字时清空拼音缓冲，回到面板时恢复待机页。
+    @objc private func toggleTypeMode() {
+        typeState = TypeState()
+        setMode(mode == .typing ? .idle : .typing)
     }
 
     // MARK: 门禁视图（没有完全访问时）
@@ -419,10 +463,7 @@ final class KeyboardViewController: UIInputViewController {
         tonesBtn.heightAnchor.constraint(equalToConstant: 34).isActive = true
         tonesBtn.addTarget(self, action: #selector(openTonePicker), for: .touchUpInside)
 
-        let vstack = UIStackView(arrangedSubviews: [guide, btnRow, tonesBtn])
-        vstack.axis = .vertical
-        vstack.spacing = 8
-
+        var blocks: [UIView] = [guide]
         // 剪贴板有内容但这次弹出没自动触发（键盘一直开着时复制的）：给个显式入口
         if hasFullAccess,
            let t = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -432,8 +473,35 @@ final class KeyboardViewController: UIInputViewController {
                                  icon: "doc.on.clipboard", font: .systemFont(ofSize: 12))
             chip.heightAnchor.constraint(equalToConstant: 34).isActive = true
             chip.addTarget(self, action: #selector(analyzeClipboard), for: .touchUpInside)
-            vstack.insertArrangedSubview(chip, at: 1)
+            blocks.append(chip)
         }
+        blocks.append(btnRow)
+
+        // 自动分析开关：关掉后键盘出现时不读剪贴板、不请求屏幕扫描，
+        // 只在手动点「分析剪贴板」时读取——系统粘贴提示会明显变少（「只同意一次」的实现方式）
+        let autoRow = UIStackView()
+        autoRow.axis = .horizontal
+        autoRow.spacing = 8
+        autoRow.alignment = .center
+        let autoLabel = KB.label(L("自动分析剪贴板", "Auto-analyze clipboard"), font: .systemFont(ofSize: 13))
+        autoLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let autoSwitch = UISwitch()
+        autoSwitch.isOn = cfg.autoClipboard
+        autoSwitch.transform = CGAffineTransform(scaleX: 0.8, y: 0.8)
+        autoSwitch.addTarget(self, action: #selector(autoClipboardToggled(_:)), for: .valueChanged)
+        autoRow.addArrangedSubview(autoLabel)
+        autoRow.addArrangedSubview(autoSwitch)
+        autoRow.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        let autoHint = KB.label(
+            L("关闭后只在手动点击时读取，系统粘贴提示更少", "Off: read only on manual tap — fewer system paste prompts"),
+            font: .systemFont(ofSize: 11), color: KB.secondaryText, lines: 0)
+        blocks.append(autoRow)
+        blocks.append(autoHint)
+        blocks.append(tonesBtn)
+
+        let vstack = UIStackView(arrangedSubviews: blocks)
+        vstack.axis = .vertical
+        vstack.spacing = 8
 
         if JevDraft(cfg: cfg).isConfigured {
             // 配置完整时不占行
@@ -444,6 +512,12 @@ final class KeyboardViewController: UIInputViewController {
         }
         fitBlocks = [vstack]
         return vstack
+    }
+
+    @objc private func autoClipboardToggled(_ sw: UISwitch) {
+        var cfg = JevStore.loadConfig()
+        cfg.autoClipboard = sw.isOn
+        JevStore.saveConfig(cfg)
     }
 
     // MARK: 话术选择视图（直接在键盘上配）
@@ -796,6 +870,337 @@ final class KeyboardViewController: UIInputViewController {
             } else {
                 self.setMode(.result)
             }
+        }
+    }
+
+    // MARK: 打字键盘（顶栏 ⌨️ 进入）
+
+    /// 打字键盘整体视图。状态都存在 typeState 里，切层/切中英时整个重建不丢内容。
+    /// 固定行高（状态行 34 + 4 行键 × 42 + 间距），比 AI 面板矮，配合 refit() 定高。
+    private func typingView() -> UIView {
+        let outer = UIStackView()
+        outer.axis = .vertical
+        outer.spacing = 5
+
+        // 状态行：左拼音缓冲/模式，右候选滚动条
+        let statusRow = UIStackView()
+        statusRow.axis = .horizontal
+        statusRow.spacing = 6
+        statusRow.alignment = .center
+
+        let langBtn = KB.button(typeState.chinese ? "中" : "EN", font: .systemFont(ofSize: 12, weight: .semibold))
+        langBtn.widthAnchor.constraint(equalToConstant: 40).isActive = true
+        langBtn.heightAnchor.constraint(equalToConstant: 28).isActive = true
+        langBtn.addTarget(self, action: #selector(typeLangTapped), for: .touchUpInside)
+        typeLangBtn = langBtn
+
+        let pyLabel = KB.label(L("中 · 直接打拼音", "ZH · type pinyin"), font: .systemFont(ofSize: 12), color: KB.secondaryText)
+        pyLabel.setContentHuggingPriority(.required, for: .horizontal)
+        pyLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        typePinyinLabel = pyLabel
+
+        let candScroll = UIScrollView()
+        candScroll.showsHorizontalScrollIndicator = false
+        candScroll.delaysContentTouches = false
+        let candStack = UIStackView()
+        candStack.axis = .horizontal
+        candStack.spacing = 6
+        candStack.alignment = .center
+        candScroll.addSubview(candStack)
+        candStack.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            candStack.topAnchor.constraint(equalTo: candScroll.contentLayoutGuide.topAnchor),
+            candStack.bottomAnchor.constraint(equalTo: candScroll.contentLayoutGuide.bottomAnchor),
+            candStack.leadingAnchor.constraint(equalTo: candScroll.contentLayoutGuide.leadingAnchor),
+            candStack.trailingAnchor.constraint(equalTo: candScroll.contentLayoutGuide.trailingAnchor),
+            candStack.heightAnchor.constraint(equalTo: candScroll.heightAnchor),
+        ])
+        typeCandStack = candStack
+
+        statusRow.addArrangedSubview(langBtn)
+        statusRow.addArrangedSubview(pyLabel)
+        statusRow.addArrangedSubview(candScroll)
+        statusRow.heightAnchor.constraint(equalToConstant: 34).isActive = true
+
+        let keyRows = UIStackView(arrangedSubviews: typeState.layer == .symbols ? symbolsRows() : letterRows())
+        keyRows.axis = .vertical
+        keyRows.spacing = 5
+
+        outer.addArrangedSubview(statusRow)
+        outer.addArrangedSubview(keyRows)
+        refreshTypeCandidates()
+        updateTypeKeyAppearance()
+        fitBlocks = [outer]
+        return outer
+    }
+
+    private func typeRow(_ chars: [String], leadingPad: CGFloat = 0, trailingPad: CGFloat = 0,
+                         action: Selector = #selector(typeKeyTapped(_:))) -> UIStackView {
+        let s = UIStackView()
+        s.axis = .horizontal
+        s.spacing = 4
+        s.distribution = .fillEqually
+        if leadingPad > 0 {
+            let sp = UIView()
+            sp.widthAnchor.constraint(equalToConstant: leadingPad).isActive = true
+            s.addArrangedSubview(sp)
+        }
+        for ch in chars {
+            let b = KB.button(ch, font: .systemFont(ofSize: 16, weight: .medium))
+            b.heightAnchor.constraint(equalToConstant: 42).isActive = true
+            b.accessibilityIdentifier = ch            // 字符走 identifier，不依赖 configuration 渲染的 title
+            b.addTarget(self, action: action, for: .touchUpInside)
+            s.addArrangedSubview(b)
+        }
+        if trailingPad > 0 {
+            let sp = UIView()
+            sp.widthAnchor.constraint(equalToConstant: trailingPad).isActive = true
+            s.addArrangedSubview(sp)
+        }
+        return s
+    }
+
+    /// 字母层：QWERTY + shift + 删除。
+    private func letterRows() -> [UIView] {
+        let pad: CGFloat = 16
+        var rows: [UIView] = [
+            typeRow(["Q","W","E","R","T","Y","U","I","O","P"]),
+            typeRow(["A","S","D","F","G","H","J","K","L"], leadingPad: pad, trailingPad: pad),
+        ]
+
+        // 第三行：shift + Z..M + 删除
+        let r3 = UIStackView()
+        r3.axis = .horizontal
+        r3.spacing = 4
+        r3.distribution = .fillEqually
+        let shift = KB.button("", icon: typeState.shift ? "shift.fill" : "shift")
+        shift.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        shift.addTarget(self, action: #selector(typeShiftTapped), for: .touchUpInside)
+        typeShiftBtn = shift
+        r3.addArrangedSubview(shift)
+        for ch in ["Z","X","C","V","B","N","M"] {
+            let b = KB.button(ch, font: .systemFont(ofSize: 16, weight: .medium))
+            b.heightAnchor.constraint(equalToConstant: 42).isActive = true
+            b.accessibilityIdentifier = ch
+            b.addTarget(self, action: #selector(typeKeyTapped(_:)), for: .touchUpInside)
+            r3.addArrangedSubview(b)
+        }
+        let del = KB.button("", icon: "delete.left")
+        del.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        del.addTarget(self, action: #selector(typeDeleteTapped), for: .touchUpInside)
+        r3.addArrangedSubview(del)
+        rows.append(r3)
+        rows.append(bottomRow())
+        return rows
+    }
+
+    /// 符号层：数字 + 常用符号 + 中文标点。
+    private func symbolsRows() -> [UIView] {
+        var rows: [UIView] = [
+            typeRow(["1","2","3","4","5","6","7","8","9","0"]),
+            typeRow(["-","/",":",";","(",")","$","&","@","\""]),
+        ]
+        let r3 = UIStackView()
+        r3.axis = .horizontal
+        r3.spacing = 4
+        r3.distribution = .fillEqually
+        let abc = KB.button("ABC", font: .systemFont(ofSize: 14, weight: .semibold))
+        abc.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        abc.addTarget(self, action: #selector(typeLayerTapped), for: .touchUpInside)
+        typeLayerBtn = abc
+        r3.addArrangedSubview(abc)
+        for ch in ["，","。","？","！","%","+","="] {
+            let b = KB.button(ch, font: .systemFont(ofSize: 16, weight: .medium))
+            b.heightAnchor.constraint(equalToConstant: 42).isActive = true
+            b.accessibilityIdentifier = ch
+            b.addTarget(self, action: #selector(typeKeyTapped(_:)), for: .touchUpInside)
+            r3.addArrangedSubview(b)
+        }
+        let del = KB.button("", icon: "delete.left")
+        del.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        del.addTarget(self, action: #selector(typeDeleteTapped), for: .touchUpInside)
+        r3.addArrangedSubview(del)
+        rows.append(r3)
+        rows.append(bottomRow())
+        return rows
+    }
+
+    /// 底行：123/ABC · 逗号 · 空格 · 句号 · 回车。手工约束，空格按比例拉宽。
+    private func bottomRow() -> UIView {
+        let row = UIView()
+
+        let layerBtn = KB.button(typeState.layer == .letters ? "123" : "ABC", font: .systemFont(ofSize: 14, weight: .semibold))
+        typeLayerBtn = layerBtn
+        layerBtn.addTarget(self, action: #selector(typeLayerTapped), for: .touchUpInside)
+
+        let comma = KB.button(typeState.chinese ? "，" : ",", font: .systemFont(ofSize: 15, weight: .medium))
+        comma.accessibilityIdentifier = typeState.chinese ? "，" : ","
+        comma.addTarget(self, action: #selector(typeKeyTapped(_:)), for: .touchUpInside)
+
+        let space = KB.button(L("空格", "space"), font: .systemFont(ofSize: 13, weight: .medium))
+        space.addTarget(self, action: #selector(typeSpaceTapped), for: .touchUpInside)
+
+        let dot = KB.button(typeState.chinese ? "。" : ".", font: .systemFont(ofSize: 15, weight: .medium))
+        dot.accessibilityIdentifier = typeState.chinese ? "。" : "."
+        dot.addTarget(self, action: #selector(typeKeyTapped(_:)), for: .touchUpInside)
+
+        let ret = KB.button("", icon: "return")
+        ret.addTarget(self, action: #selector(typeReturnTapped), for: .touchUpInside)
+
+        [layerBtn, comma, space, dot, ret].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            $0.heightAnchor.constraint(equalToConstant: 42).isActive = true
+            row.addSubview($0)
+        }
+        NSLayoutConstraint.activate([
+            layerBtn.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            layerBtn.widthAnchor.constraint(equalToConstant: 52),
+            comma.leadingAnchor.constraint(equalTo: layerBtn.trailingAnchor, constant: 4),
+            comma.widthAnchor.constraint(equalToConstant: 46),
+            space.leadingAnchor.constraint(equalTo: comma.trailingAnchor, constant: 4),
+            space.trailingAnchor.constraint(equalTo: dot.leadingAnchor, constant: -4),
+            space.widthAnchor.constraint(greaterThanOrEqualToConstant: 90),
+            dot.widthAnchor.constraint(equalToConstant: 46),
+            dot.trailingAnchor.constraint(equalTo: ret.leadingAnchor, constant: -4),
+            ret.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            ret.widthAnchor.constraint(equalToConstant: 58),
+        ] + [layerBtn, comma, space, dot, ret].map { $0.centerYAnchor.constraint(equalTo: row.centerYAnchor) })
+        return row
+    }
+
+    /// 拼音/英文候选：词优先（最多 5），再补字（合计最多 10）。
+    private func typingCandidates() -> [String] {
+        let p = typeState.pinyin.lowercased()
+        guard !p.isEmpty else { return [] }
+        var out: [String] = []
+        var seen = Set<String>()
+        for k in PinyinData.sortedWordKeys where k.hasPrefix(p) {
+            for w in PinyinData.wordMap[k] ?? [] where seen.insert(w).inserted {
+                out.append(w)
+                if out.count >= 5 { return out }
+            }
+        }
+        for k in PinyinData.sortedCharKeys where k.hasPrefix(p) {
+            for c in PinyinData.charMap[k] ?? [] where seen.insert(c).inserted {
+                out.append(c)
+                if out.count >= 10 { return out }
+            }
+        }
+        return out
+    }
+
+    /// 刷新拼音缓冲标签 + 候选条（原地更新，不重建整个打字视图）。
+    private func refreshTypeCandidates() {
+        guard let label = typePinyinLabel, let stack = typeCandStack else { return }
+        let p = typeState.pinyin
+        label.text = typeState.chinese
+            ? (p.isEmpty ? L("中 · 直接打拼音", "ZH · type pinyin") : L("拼 ", "PY ") + p)
+            : "EN"
+        stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let cands = typingCandidates()
+        for c in cands {
+            let b = KB.button(c, font: .systemFont(ofSize: 13, weight: .medium))
+            b.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            b.accessibilityIdentifier = c
+            b.addTarget(self, action: #selector(typeCandidateTapped(_:)), for: .touchUpInside)
+            stack.addArrangedSubview(b)
+        }
+        if !p.isEmpty, !cands.isEmpty {
+            let tip = KB.label(L("空格上屏①", "SPC ①"), font: .systemFont(ofSize: 11), color: KB.secondaryText)
+            tip.setContentHuggingPriority(.required, for: .horizontal)
+            stack.addArrangedSubview(tip)
+        } else if !p.isEmpty {
+            let hint = KB.label(L("没有匹配，删掉重打", "no match"), font: .systemFont(ofSize: 11), color: KB.secondaryText)
+            hint.setContentHuggingPriority(.required, for: .horizontal)
+            stack.addArrangedSubview(hint)
+        }
+    }
+
+    private func updateTypeKeyAppearance() {
+        let keyBG = UIColor { t in
+            t.userInterfaceStyle == .dark ? UIColor(white: 1, alpha: 0.12) : UIColor(white: 0, alpha: 0.06)
+        }
+        typeShiftBtn?.configuration?.image = UIImage(systemName: typeState.shift ? "shift.fill" : "shift")
+        typeShiftBtn?.configuration?.baseBackgroundColor = typeState.shift ? KB.brand : keyBG
+        typeLayerBtn?.configuration?.title = typeState.layer == .letters ? "123" : "ABC"
+        typeLangBtn?.configuration?.title = typeState.chinese ? "中" : "EN"
+    }
+
+    /// 打字键：字母层 + 中文模式 → 进拼音缓冲（统一转小写，按键显示大写不影响）；
+    /// 其余（英文/数字/符号）直接上屏，shift 只对下一个英文字母生效。
+    @objc private func typeKeyTapped(_ sender: UIButton) {
+        guard let ch = sender.accessibilityIdentifier, ch.count == 1, let first = ch.first else { return }
+        if typeState.chinese && typeState.layer == .letters && first.isLetter {
+            typeState.pinyin.append(Character(String(first).lowercased()))
+            refreshTypeCandidates()
+            return
+        }
+        let out = first.isLetter
+            ? (typeState.shift ? String(first).uppercased() : String(first).lowercased())
+            : ch
+        textDocumentProxy.insertText(out)
+        typeState.shift = false
+        updateTypeKeyAppearance()
+    }
+
+    @objc private func typeCandidateTapped(_ sender: UIButton) {
+        guard let t = sender.accessibilityIdentifier else { return }
+        commit(t)
+    }
+
+    private func commit(_ s: String) {
+        textDocumentProxy.insertText(s)
+        typeState.pinyin = ""
+        refreshTypeCandidates()
+    }
+
+    private func commitFirstCandidate() {
+        if let first = typingCandidates().first {
+            commit(first)
+        } else {
+            typeState.pinyin = ""
+            refreshTypeCandidates()
+        }
+    }
+
+    @objc private func typeShiftTapped() {
+        typeState.shift.toggle()
+        updateTypeKeyAppearance()
+    }
+
+    @objc private func typeLayerTapped() {
+        typeState.layer = typeState.layer == .letters ? .symbols : .letters
+        setMode(.typing)
+    }
+
+    @objc private func typeLangTapped() {
+        typeState.chinese.toggle()
+        typeState.pinyin = ""
+        setMode(.typing)
+    }
+
+    @objc private func typeDeleteTapped() {
+        if typeState.chinese && !typeState.pinyin.isEmpty {
+            typeState.pinyin.removeLast()
+            refreshTypeCandidates()
+        } else {
+            textDocumentProxy.deleteBackward()
+        }
+    }
+
+    @objc private func typeSpaceTapped() {
+        if typeState.chinese && !typeState.pinyin.isEmpty {
+            commitFirstCandidate()
+        } else {
+            textDocumentProxy.insertText(" ")
+        }
+    }
+
+    @objc private func typeReturnTapped() {
+        if typeState.chinese && !typeState.pinyin.isEmpty {
+            commitFirstCandidate()
+        } else {
+            textDocumentProxy.insertText("\n")
         }
     }
 }
