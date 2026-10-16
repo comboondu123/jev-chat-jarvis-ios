@@ -84,6 +84,7 @@ struct ProvidersView: View {
         store.config.genKind = p.kind
         store.config.genBase = p.base
         store.config.genModel = p.model
+        store.config.genExtraJSON = p.extraJSON
     }
 
     // MARK: 判断层
