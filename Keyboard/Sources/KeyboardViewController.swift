@@ -1,5 +1,4 @@
 import UIKit
-import Darwin
 
 /// Jev 键盘：一个「回复面板」键盘，不是打字键盘。
 ///
@@ -122,9 +121,11 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     /// 通知越狱插件（com.jevchat.screenreader）截屏 OCR 聊天内容写入剪贴板。
-    /// 用 Darwin notify（系统级通知，跨进程可用）；没装插件时无人监听，完全无害。
+    /// 键盘扩展运行在宿主 App（微信/Soul）进程内，插件也注入同一进程，
+    /// 用进程内 NotificationCenter 通信即可；没装插件时无人监听，完全无害。
     private func postScanRequest() {
-        notify_post("com.jevchat.ask-scan")
+        NotificationCenter.default.post(name: Notification.Name("com.jevchat.ask-scan"),
+                                        object: nil)
     }
 
     /// 预热生成层连接。实测同一条起草请求，第二次能从 ~1.9 秒降到 ~0.5 秒——
