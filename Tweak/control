@@ -1,6 +1,6 @@
 Package: com.jevchat.screenreader
 Name: Jev ScreenReader
-Version: 1.0.0
+Version: 1.0.1
 Architecture: iphoneos-arm64
 Depends: mobilesubstrate (>= 0.9.5000)
 Maintainer: comboonddu
