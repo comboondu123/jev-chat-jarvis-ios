@@ -1,8 +1,18 @@
 #import "JevFloaty.h"
 #import <Vision/Vision.h>
+#import <dlfcn.h>
 
-// UIKit 私有系统截屏函数：在 SpringBoard 进程里截取当前完整屏幕（含前台任意 App）
-extern CGImageRef UIGetScreenImage(void);
+// UIGetScreenImage：UIKit 私有系统截屏函数（SpringBoard 进程里截取当前完整屏幕，
+// 含前台任意 App）。私有符号不在 SDK 导出表 → 编译期无法链接，用 dlsym 运行时解析。
+typedef CGImageRef (*JevUIGetScreenImageFn)(void);
+static JevUIGetScreenImageFn JevUIGetScreenImage(void) {
+    static JevUIGetScreenImageFn fn = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        fn = (JevUIGetScreenImageFn)dlsym(RTLD_DEFAULT, "UIGetScreenImage");
+    });
+    return fn;
+}
 
 // ============================================================
 // Jev 全局悬浮球（tweak 内自绘 UI，注入 SpringBoard，不依赖任何宿主 App）
@@ -144,7 +154,9 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             // 系统截屏：截当前完整屏幕（任意前台 App 的画面都包含；悬浮球是独立高层级窗口，不进画面）
-            CGImageRef cg = UIGetScreenImage();
+            JevUIGetScreenImageFn screenShot = JevUIGetScreenImage();
+            if (!screenShot) { completion(@""); return; }
+            CGImageRef cg = screenShot();
             if (!cg) { completion(@""); return; }
             UIImage *image = [UIImage imageWithCGImage:cg];
             if (!image) { completion(@""); return; }
