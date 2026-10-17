@@ -551,14 +551,14 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
 - (UIView *)currentInputField {
     UIWindow *w = [self mainWindow];
     if (!w) return nil;
-    __block UIView *found = nil;
-    __block void (^walk)(UIView *) = ^(UIView *v) {
-        if (found) return;
-        if (v.isFirstResponder) { found = v; return; }
-        for (UIView *s in v.subviews) walk(s);
-    };
-    walk(w);
-    return found;
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:w];
+    while (stack.count > 0) {
+        UIView *v = stack.lastObject;
+        [stack removeLastObject];
+        if (v.isFirstResponder) return v;
+        [stack addObjectsFromArray:v.subviews];
+    }
+    return nil;
 }
 
 - (BOOL)insertText:(NSString *)text {
@@ -656,11 +656,14 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
         dispatch_async(dispatch_get_main_queue(), ^{
             __strong typeof(self) self = weakSelf;
             if (!self) return;
+            [lock lock];
+            NSArray *snapshot = [results copy];   // 超时场景后台可能仍在写，先快照
+            [lock unlock];
             NSMutableArray *cands = [NSMutableArray array];
             NSMutableArray *errs = [NSMutableArray array];
             // 按话术槽顺序展示；同话术内保留模型顺序（前稳后放）
             for (NSString *tone in self.toneNames) {
-                for (NSDictionary *r in results) {
+                for (NSDictionary *r in snapshot) {
                     if (![r[@"tone"] isEqualToString:tone]) continue;
                     if (r[@"err"]) { [errs addObject:r[@"err"]]; continue; }
                     [cands addObjectsFromArray:r[@"texts"]];
