@@ -1,8 +1,11 @@
 #import "JevFloaty.h"
 #import <Vision/Vision.h>
 
+// UIKit 私有系统截屏函数：在 SpringBoard 进程里截取当前完整屏幕（含前台任意 App）
+extern CGImageRef UIGetScreenImage(void);
+
 // ============================================================
-// Jev 悬浮球（tweak 内自绘 UI，不依赖宿主 App 的任何内部结构）
+// Jev 全局悬浮球（tweak 内自绘 UI，注入 SpringBoard，不依赖任何宿主 App）
 // ============================================================
 
 #pragma mark - 常量
@@ -133,31 +136,17 @@ static NSArray<NSString *> *jev_parseCandidates(NSString *raw, NSInteger limit) 
     return out;
 }
 
-#pragma mark - 屏幕 OCR（与键盘版同一套规则：滤顶部导航/底部输入栏，从底部取 ≤14 行）
+#pragma mark - 屏幕 OCR（SpringBoard 进程：系统截屏 → Vision，滤顶部导航/底部输入栏，取 ≤14 行）
 
 void jev_ocrScreenText(void (^completion)(NSString *text)) {
     if (!completion) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            // 主窗口 = 正常层级（windowLevel==0）的窗口；我们自己的悬浮球是更高层级，不会被截进去
-            UIWindow *window = nil;
-            for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
-                if (![scene isKindOfClass:UIWindowScene.class]) continue;
-                UIWindowScene *ws = (UIWindowScene *)scene;
-                for (UIWindow *w in ws.windows) {
-                    if (w.windowLevel == 0) { window = w; break; }
-                }
-                if (window) break;
-            }
-            if (!window || window.bounds.size.width < 10 || window.bounds.size.height < 10) {
-                completion(@""); return;
-            }
-            UIGraphicsImageRenderer *renderer =
-                [[UIGraphicsImageRenderer alloc] initWithSize:window.bounds.size];
-            UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
-                [window drawViewHierarchyInRect:window.bounds afterScreenUpdates:NO];
-            }];
+            // 系统截屏：截当前完整屏幕（任意前台 App 的画面都包含；悬浮球是独立高层级窗口，不进画面）
+            CGImageRef cg = UIGetScreenImage();
+            if (!cg) { completion(@""); return; }
+            UIImage *image = [UIImage imageWithCGImage:cg];
             if (!image) { completion(@""); return; }
 
             VNRecognizeTextRequest *req = [[VNRecognizeTextRequest alloc] init];
@@ -252,15 +241,6 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
     return nil;
 }
 
-/// 主窗口：正常层级（不含我们自己的悬浮窗）
-- (UIWindow *)mainWindow {
-    UIWindowScene *scene = [self mainScene];
-    for (UIWindow *w in scene.windows) {
-        if (w.windowLevel == 0 && w.bounds.size.width > 10) return w;
-    }
-    return scene.windows.firstObject;
-}
-
 #pragma mark 键盘事件
 
 - (void)keyboardWillShow:(NSNotification *)note {
@@ -348,7 +328,7 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
     [self buildPanelIfNeeded];
     [self placePanel];
     [self refreshToneChips];
-    [self setStatus:@"点「生成回复」自动读聊天内容出候选；或「粘贴剪贴板」" color:nil];
+    [self setStatus:@"点「生成回复」自动读屏幕出候选；点候选自动复制，输入框长按粘贴" color:nil];
     [self clearCandidates];
     self.panelWindow.hidden = NO;
 }
@@ -409,12 +389,11 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
     ]];
     self.toneScroll = toneScroll;
 
-    // 动作按钮
-    UIButton *pasteBtn = [self actionButton:@"粘贴剪贴板" icon:@"doc.on.clipboard" primary:NO
-                                     action:@selector(pasteClipboard)];
+    // 动作按钮：全局悬浮球在系统层（SpringBoard），无法跨进程直接写宿主输入框，
+    // 所以唯一动作 = 生成回复；点候选自动复制到剪贴板，去输入框长按粘贴即可
     UIButton *genBtn = [self actionButton:@"生成回复" icon:@"sparkles" primary:YES
                                    action:@selector(generateReply)];
-    UIStackView *btnRow = [[UIStackView alloc] initWithArrangedSubviews:@[pasteBtn, genBtn]];
+    UIStackView *btnRow = [[UIStackView alloc] initWithArrangedSubviews:@[genBtn]];
     btnRow.axis = UILayoutConstraintAxisHorizontal;
     btnRow.spacing = 8;
     btnRow.distribution = UIStackViewDistributionFillEqually;
@@ -547,46 +526,13 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
     for (UIView *v in self.candidateStack.arrangedSubviews) [v removeFromSuperview];
 }
 
-/// 当前输入框：遍历主窗口找第一响应者（UITextView / UITextField）
-- (UIView *)currentInputField {
-    UIWindow *w = [self mainWindow];
-    if (!w) return nil;
-    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:w];
-    while (stack.count > 0) {
-        UIView *v = stack.lastObject;
-        [stack removeLastObject];
-        if (v.isFirstResponder) return v;
-        [stack addObjectsFromArray:v.subviews];
-    }
-    return nil;
-}
-
-- (BOOL)insertText:(NSString *)text {
-    UIView *f = [self currentInputField];
-    if ([f isKindOfClass:UITextView.class]) {
-        [(UITextView *)f insertText:text];
-        return YES;
-    }
-    if ([f isKindOfClass:UITextField.class]) {
-        [(UITextField *)f insertText:text];
-        return YES;
-    }
-    return NO;
-}
-
-- (void)pasteClipboard {
-    NSString *s = UIPasteboard.generalPasteboard.string;
-    s = [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (s.length == 0) {
-        [self setStatus:@"剪贴板是空的：先长按复制一条消息再试" color:[UIColor systemOrangeColor]];
-        return;
-    }
-    if ([self insertText:s]) {
-        [self setStatus:@"已粘贴到输入框 ✓（首次会问一次「允许粘贴」，允许后不再提示）"
-                  color:[UIColor systemGreenColor]];
-    } else {
-        [self setStatus:@"没找到输入框：先点一下输入框再试" color:[UIColor systemOrangeColor]];
-    }
+/// 写入剪贴板（全局悬浮球在 SpringBoard 进程，无法跨进程写宿主输入框：
+/// 点候选/复制 = 写入剪贴板，用户在输入框长按粘贴，首次允许一次后不再询问）
+- (void)copyToClipboard:(NSString *)text {
+    NSString *t = [text stringByTrimmingCharactersInSet:
+                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (t.length == 0) return;
+    UIPasteboard.generalPasteboard.string = t;
 }
 
 - (void)generateReply {
@@ -608,7 +554,7 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
         __strong typeof(self) self = weakSelf;
         if (!self) return;
         if (chatText.length == 0) {
-            [self setStatus:@"没读到聊天内容：请先进入聊天界面（打开输入框）再点生成"
+            [self setStatus:@"没读到屏幕内容：请先停在聊天界面（输入框弹出键盘）再点生成"
                       color:[UIColor systemOrangeColor]];
             return;
         }
@@ -678,7 +624,7 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
             [self showCandidates:cands];
             NSString *note = errs.count ? [NSString stringWithFormat:@"已出 %ld 条；%ld 个话术失败",
                                            (long)cands.count, (long)errs.count] : @"";
-            [self setStatus:[NSString stringWithFormat:@"点候选直接进输入框，然后手动发送%@", note]
+            [self setStatus:[NSString stringWithFormat:@"点候选自动复制，去输入框长按粘贴%@", note]
                       color:errs.count ? [UIColor systemOrangeColor] : [UIColor systemGreenColor]];
         });
     });
@@ -769,11 +715,8 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
 - (void)candidateTapped:(UIButton *)sender {
     NSString *text = sender.configuration.attributedTitle.string;
     if (text.length == 0) return;
-    if ([self insertText:text]) {
-        [self setStatus:@"已插入输入框 ✓（点发送发出）" color:[UIColor systemGreenColor]];
-    } else {
-        [self setStatus:@"没找到输入框：先点一下输入框再点候选" color:[UIColor systemOrangeColor]];
-    }
+    [self copyToClipboard:text];
+    [self setStatus:@"已复制 ✓ 去输入框长按粘贴（允许一次后不再问）" color:[UIColor systemGreenColor]];
 }
 
 @end

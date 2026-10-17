@@ -6,8 +6,7 @@
 	<dict>
 		<key>Bundles</key>
 		<array>
-			<string>com.tencent.xin</string>
-			<string>com.soulglobal.cn</string>
+			<string>com.apple.springboard</string>
 		</array>
 	</dict>
 </dict>
