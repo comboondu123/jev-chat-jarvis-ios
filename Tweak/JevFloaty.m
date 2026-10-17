@@ -283,7 +283,7 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
     if (!self.bubbleWindow) {
         UIWindow *w = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
         w.windowScene = [self mainScene];
-        w.windowLevel = UIWindowLevelStatusBar + 1;   // 盖 App 内容，不盖键盘
+        w.windowLevel = 1001.0;   // UIWindowLevelStatusBar(1000) + 1：盖 App 内容，不盖键盘
         w.backgroundColor = [UIColor clearColor];
         w.userInteractionEnabled = YES;
 
@@ -331,7 +331,11 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
 }
 
 - (void)bubbleTapped {
-    self.panelOpen ? [self closePanel] : [self openPanel];
+    if (self.panelOpen) {
+        [self closePanel];
+    } else {
+        [self openPanel];
+    }
 }
 
 #pragma mark 面板
@@ -459,7 +463,7 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
 
     UIWindow *pw = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
     pw.windowScene = [self mainScene];
-    pw.windowLevel = UIWindowLevelStatusBar + 1;
+    pw.windowLevel = 1001.0;   // UIWindowLevelStatusBar(1000) + 1：盖 App 内容，不盖键盘
     pw.backgroundColor = [UIColor clearColor];
     pw.userInteractionEnabled = YES;
     [pw addSubview:card];
@@ -548,7 +552,7 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
     UIWindow *w = [self mainWindow];
     if (!w) return nil;
     __block UIView *found = nil;
-    void (^walk)(UIView *) = ^(UIView *v) {
+    __block void (^walk)(UIView *) = ^(UIView *v) {
         if (found) return;
         if (v.isFirstResponder) { found = v; return; }
         for (UIView *s in v.subviews) walk(s);
@@ -705,8 +709,9 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
     req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
     req.timeoutInterval = 35;
 
-    [[NSURLSession sharedSession] dataTaskWithRequest:req
-                                    completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+    NSURLSessionDataTask *task =
+        [[NSURLSession sharedSession] dataTaskWithRequest:req
+                                        completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err) { completion(nil, err.localizedDescription); return; }
         NSInteger code = [(NSHTTPURLResponse *)resp statusCode];
         if (code < 200 || code >= 300) {
@@ -732,30 +737,34 @@ void jev_ocrScreenText(void (^completion)(NSString *text)) {
         } else {
             completion(nil, @"模型只回了思考没出正文：请换非思考模型（如 deepseek-chat / glm-4-flash）");
         }
-    }] resume;
+    }];
+    [task resume];
 }
 
 - (void)showCandidates:(NSArray<NSString *> *)cands {
     for (UIView *v in self.candidateStack.arrangedSubviews) [v removeFromSuperview];
     __weak typeof(self) weakSelf = self;
     for (NSString *text in cands) {
-        // 候选可能超一行，用普通按钮（configuration 不支持多行标题）
+        // configuration + attributedTitle 支持多行标题（contentEdgeInsets 在 iOS 15 已废弃）
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.backgroundColor = [UIColor tertiarySystemFillColor];
-        b.layer.cornerRadius = 10;
-        [b setTitle:text forState:UIControlStateNormal];
-        [b setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
-        b.titleLabel.font = [UIFont systemFontOfSize:14];
-        b.titleLabel.numberOfLines = 0;
-        b.titleLabel.textAlignment = NSTextAlignmentLeft;
-        b.contentEdgeInsets = UIEdgeInsetsMake(6, 10, 6, 10);
+        b.configuration = [UIButtonConfiguration filledButtonConfiguration];
+        b.configuration.attributedTitle = [[NSAttributedString alloc]
+            initWithString:text
+                attributes:@{
+                    NSFontAttributeName: [UIFont systemFontOfSize:14],
+                    NSForegroundColorAttributeName: [UIColor labelColor],
+                }];
+        b.configuration.contentInsets = NSDirectionalEdgeInsetsMake(6, 10, 6, 10);
+        b.configuration.titleLineBreakMode = NSLineBreakByWordWrapping;
+        b.configuration.cornerStyle = UIButtonConfigurationCornerStyleMedium;
+        b.configuration.baseBackgroundColor = [UIColor tertiarySystemFillColor];
         [b addTarget:weakSelf action:@selector(candidateTapped:) forControlEvents:UIControlEventTouchUpInside];
         [self.candidateStack addArrangedSubview:b];
     }
 }
 
 - (void)candidateTapped:(UIButton *)sender {
-    NSString *text = [sender titleForState:UIControlStateNormal];
+    NSString *text = sender.configuration.attributedTitle.string;
     if (text.length == 0) return;
     if ([self insertText:text]) {
         [self setStatus:@"已插入输入框 ✓（点发送发出）" color:[UIColor systemGreenColor]];
