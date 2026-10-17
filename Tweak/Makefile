@@ -8,7 +8,7 @@ TARGET = iphone:clang:latest:16.0
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = jev-screenreader
-jev-screenreader_FILES = Tweak.xm
+jev-screenreader_FILES = Tweak.xm JevFloaty.m
 jev-screenreader_CFLAGS = -fobjc-arc
 jev-screenreader_LDFLAGS = -framework Vision
 

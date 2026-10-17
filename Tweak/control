@@ -1,9 +1,9 @@
 ﻿Package: com.jevchat.screenreader
 Name: Jev ScreenReader
-Version: 1.0.6
+Version: 1.1.0
 Architecture: iphoneos-arm64
 Depends: mobilesubstrate (>= 0.9.5000)
 Maintainer: comboonddu
 Author: comboonddu
 Section: Tweaks
-Description: 鑱婂ぉ鐣岄潰灞忓箷 OCR锛氱洃鍚埌 Jev 閿洏鐨勮姹傚悗锛屾埅鍙栧綋鍓嶅睆骞曘€佽瘑鍒亰澶╂枃瀛楀苟鍐欏叆鍓创鏉匡紝閰嶅悎 Jev 閿洏銆屽鍒跺嵆鍥炲銆嶈嚜鍔ㄧ敓鎴愬洖澶嶃€備粎鍦ㄤ綘鑷繁鐨勮秺鐙辫澶囦笂浣跨敤锛岃瘑鍒嚭鐨勬枃瀛椾細鍙戦€佸埌浣犻厤缃殑妯″瀷 API銆?
+Description: Jev 悬浮球 + 聊天屏幕 OCR（完整越狱）。悬浮球：聊天界面键盘弹出时屏幕右缘出现可拖动悬浮球，点开面板可一键「粘贴剪贴板」到输入框，或自动读取聊天内容按话术生成回复候选、点选直接写入输入框，打字无需切换键盘。键盘喂料：Jev 键盘请求时截屏 OCR 聊天区写入剪贴板配合「复制即回复」。所有识别文本仅发往你自己配置的模型 API。
